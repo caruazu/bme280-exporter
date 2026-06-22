@@ -59,3 +59,10 @@ Mkfile.old
 dkms.conf
 
 # End of https://www.toptal.com/developers/gitignore/api/c
+
+# Debian build artifacts
+debian/.debhelper/
+debian/bme280-reader/
+debian/files
+debian/*.substvars
+debian/*.log

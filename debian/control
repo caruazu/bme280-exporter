@@ -1,0 +1,18 @@
+Source: bme280-reader
+Section: utils
+Priority: optional
+Maintainer: Gustavo Caruazu <gustavo@caruazu.com>
+Build-Depends: debhelper-compat (= 13)
+Rules-Requires-Root: no
+
+Package: bme280-reader
+Architecture: arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: BME280 sensor reader for Prometheus textfile collector
+ Reads temperature, humidity and pressure from a BME280 sensor
+ via the Linux IIO subsystem and writes Prometheus metrics in the
+ format expected by node_exporter's textfile collector.
+ .
+ This release ships a hello-world stub to validate the packaging,
+ systemd units and filesystem permissions before the real sensor
+ reader is introduced.

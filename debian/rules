@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+include /usr/share/dpkg/architecture.mk
+
+# Forward the resolved host triplet so the Makefile picks the right
+# cross-compiler (e.g. aarch64-linux-gnu-gcc) when building for arm64.
+export CC := $(DEB_HOST_GNU_TYPE)-gcc
+
+%:
+	dh $@ --with=installsysusers
+
+# The Makefile has no install target; dh_install handles placement.
+override_dh_auto_install:
+
+override_dh_install:
+	dh_install --sourcedir=.
+
+override_dh_shlibdeps:
+	dh_shlibdeps -- -l/usr/$(DEB_HOST_MULTIARCH)/lib
+
+override_dh_builddeb:
+	dh_builddeb --destdir=bin

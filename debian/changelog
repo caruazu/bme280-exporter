@@ -1,0 +1,6 @@
+bme280-reader (0.1.0) unstable; urgency=low
+
+  * Initial release: hello-world stub for CI/CD, systemd and permissions
+    validation before the real BME280 sensor reader is implemented.
+
+ -- Gustavo Caruazu <gustavo@caruazu.com>  Mon, 22 Jun 2026 00:00:00 +0000

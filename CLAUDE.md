@@ -8,6 +8,23 @@ Documentação de contexto para o Claude Code. Leia inteiro antes de qualquer ta
 Exporta leituras do sensor BME280 (temperatura, pressão, umidade) para o Prometheus via **textfile collector do node_exporter**. O sensor fica dentro de uma caixa hermética junto com um Raspberry Pi 4 — o objetivo real é monitorar **umidade interna da caixa**.
 
 
+## Estágio atual do código
+
+O binário em `src/hello-world.c` é um **stub de validação** — ele não lê sensor nenhum. Apenas escreve um arquivo `bme280_dummy.prom` com valores zerados no diretório configurado via `TEXTFILE_DIR`. O objetivo é validar toda a esteira (empacotamento, systemd, permissões, CI) **antes** de implementar o leitor real do BME280.
+
+O arquivo de saída do stub é `bme280_dummy.prom`; o leitor real usará `bme280.prom`.
+
+
+## Identidade do mantenedor
+
+| Campo | Valor |
+|||
+| Nome | Gustavo Caruazu |
+| E-mail | gustavo@caruazu.com |
+
+Esse e-mail deve constar em `debian/changelog` e `debian/control`.
+
+
 ## Alvo de deploy
 
 | Campo | Valor |
@@ -35,7 +52,7 @@ Exporta leituras do sensor BME280 (temperatura, pressão, umidade) para o Promet
 | g++ | 13.3.0 |
 | gdb | instalado |
 | cmake | 3.28.3 |
-| make |4.3 |
+| make | 4.3 |
 | valgrind | instalado |
 | libc6-dev (amd64) | 2.39 |
 | build-essential | instalado |
@@ -50,9 +67,14 @@ Exporta leituras do sensor BME280 (temperatura, pressão, umidade) para o Promet
 | lintian | 2.117.0 |
 | devscripts | 2.23.7 |
 
+### Restrição do devcontainer
+
+O diretório pai `/workspaces/` pertence a `root:root` e **não é gravável pelo usuário `vscode`**. Isso impede o uso de `dpkg-buildpackage` diretamente (ele grava `.deb`, `.buildinfo` e `.changes` em `..`). O comando correto no devcontainer está descrito na seção "Convenção de build".
+
 ### Volume persistente do Claude
 
 `claude-code-config-<devcontainerId>` montado em `~/.claude` — persiste login e config entre rebuilds.
+
 
 ## Arquitetura (decisões fechadas — não questionar)
 
@@ -65,7 +87,7 @@ Exporta leituras do sensor BME280 (temperatura, pressão, umidade) para o Promet
 
 ### Leitor em C
 - C11, binário único, linka apenas a libc (sem bibliotecas externas).
-- Compilado com flags de hardening (ver §10).
+- Compilado com flags de hardening (ver seção abaixo).
 - Lê o `/sys`, escala unidades, grava o `.prom`.
 - Cross-compilado para `aarch64` no devcontainer.
 
@@ -76,13 +98,13 @@ Exporta leituras do sensor BME280 (temperatura, pressão, umidade) para o Promet
 - Minimiza pegada de memória; combina com o modo forçado do BME280.
 
 ### Integração com Prometheus
-- O leitor grava em `/var/lib/node_exporter/textfile_collector/bme280.prom` (caminho configurável).
+- O leitor grava em `/var/lib/node_exporter/textfile_collector/bme280.prom` (caminho configurável via `TEXTFILE_DIR`).
 - O node_exporter republica via `--collector.textfile.directory`.
 - **Não editar nem configurar o node_exporter** — está fora do escopo.
 - **Contrato entre projetos:** o caminho do diretório textfile.
 
 ### Empacotamento Debian declarativo
-- Pacote `.deb` construído com `debhelper`.
+- Pacote `.deb` construído com `debhelper` compat 13.
 - Ciclo de vida (instalar, habilitar, remover, purgar) é do `dpkg/apt`.
 - Habilitação/criação de recursos é declarada via:
   - `sysusers.d` → cria usuário dedicado
@@ -117,7 +139,7 @@ Todo artefato compilado (binários, `.deb`, `.o`) deve ser gerado em `bin/`. O `
 - **NÃO** apagar o diretório `/var/lib/node_exporter/textfile_collector/` no purge — apenas o arquivo `bme280.prom`.
 - **NÃO** chumar `iio:device0` diretamente — resolver pelo `name`.
 - **NÃO** colocar lógica de alerta (ex.: `> 60%`) no leitor.
-
+- **NÃO** usar `dpkg-buildpackage` diretamente no devcontainer — usar `fakeroot debian/rules` (ver seção abaixo).
 
 
 ## Métricas exportadas (formato Prometheus)
@@ -141,7 +163,6 @@ bme280_up 1
 ```
 
 
-
 ## Caminhos relevantes no alvo (Raspberry Pi)
 
 | Caminho | Descrição |
@@ -155,13 +176,11 @@ bme280_up 1
 | `/boot/firmware/config.txt` | Config de boot do Pi |
 
 
-
 ## Usuário e permissões (no alvo)
 
-- Usuário dedicado: `bme280-exporter` (sem shell, sem home), criado via `sysusers.d`.
-- Pertence ao grupo `i2c` (para acesso ao `/dev/i2c-1`, se necessário).
+- Usuário dedicado: `bme280-reader` (sem shell, sem home), criado via `sysusers.d`.
+- Pertence ao grupo `i2c` (para acesso ao `/dev/i2c-1`, necessário no leitor real — ainda não configurado no stub).
 - Acesso de escrita ao diretório textfile via `tmpfiles.d`.
-
 
 
 ## Flags de hardening para compilação C
@@ -170,33 +189,110 @@ bme280_up 1
 CFLAGS = -std=c11 -Wall -Wextra -Wpedantic \
          -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
          -fPIE -pie \
-         -Wl,-z,relro -Wl,-z,now \
          -O2
+LDFLAGS = -Wl,-z,relro -Wl,-z,now
 ```
 
-Cross-compilation para aarch64:
+Cross-compilation para aarch64 (resolvido automaticamente via `debian/rules` + `dpkg/architecture.mk`):
 ```makefile
-CC = aarch64-linux-gnu-gcc
+CC = $(DEB_HOST_GNU_TYPE)-gcc   # ex: aarch64-linux-gnu-gcc quando host=arm64
 ```
 
+
+## Estrutura debian/ existente
+
+| Arquivo | Gerado por | Destino no pacote |
+|||---|
+| `debian/control` | manual | metadados do pacote |
+| `debian/changelog` | manual | versão, maintainer |
+| `debian/rules` | manual | lógica de build |
+| `debian/source/format` | manual | `3.0 (native)` |
+| `debian/bme280-reader.install` | manual | `bin/bme280-reader → usr/bin/` |
+| `debian/bme280-reader.service` | manual | `usr/lib/systemd/system/` |
+| `debian/bme280-reader.timer` | manual | `usr/lib/systemd/system/` |
+| `debian/bme280-reader.sysusers` | manual | `usr/lib/sysusers.d/bme280-reader.conf` |
+| `debian/bme280-reader.tmpfiles` | manual | `usr/lib/tmpfiles.d/bme280-reader.conf` |
+
+O `debian/rules` usa compat 13 com as seguintes particularidades:
+
+```makefile
+include /usr/share/dpkg/architecture.mk
+export CC := $(DEB_HOST_GNU_TYPE)-gcc
+
+%:
+    dh $@ --with=installsysusers       # necessário no compat 13 (auto só no 14)
+
+override_dh_auto_install:              # Makefile não tem target install
+
+override_dh_install:
+    dh_install --sourcedir=.           # lê bin/ diretamente, sem debian/tmp
+
+override_dh_shlibdeps:
+    dh_shlibdeps -- -l/usr/$(DEB_HOST_MULTIARCH)/lib   # stubs arm64 sem multiarch completo
+
+override_dh_builddeb:
+    dh_builddeb --destdir=bin          # saída em bin/ (pai não-gravável no devcontainer)
+```
+
+
+## Gotchas de empacotamento (lições aprendidas)
+
+| Problema | Causa | Solução |
+|||---|
+| `dh_installsysusers` não instala nada | no compat 13 não está na sequência padrão | `dh $@ --with=installsysusers` em `debian/rules` |
+| `dpkg-shlibdeps` não acha `libc.so.6` arm64 | sem multiarch `arm64` instalado | `override_dh_shlibdeps` com `-l/usr/aarch64-linux-gnu/lib` |
+| `dpkg-buildpackage` falha com "Permission denied" | `/workspaces/` é `root:root`, não gravável | usar `fakeroot debian/rules clean && fakeroot debian/rules binary` |
+| `dh binary` pula o `dh_auto_build` | `debian/debhelper-build-stamp` de build anterior persiste | sempre executar `debian/rules clean` antes de `binary` |
+| `dpkg-architecture -Aarm64` não muda `DEB_HOST_*` | `-A` (maiúsculo) configura TARGET, não HOST | usar `-aarm64` (minúsculo) para configurar HOST |
+| `eval $(dpkg-architecture ...)` não exporta as variáveis | `eval` só define variáveis de shell | usar `export $(dpkg-architecture -aarm64 ...)` |
 
 
 ## Convenção de build do pacote
 
+**No devcontainer** (único jeito que funciona — `dpkg-buildpackage` não grava em `/workspaces/`):
+
 ```bash
-# no devcontainer, na raiz do repo
-dpkg-buildpackage -us -uc -b --host-arch arm64
+# Exporta variáveis de arquitetura para o host arm64
+export $(dpkg-architecture -aarm64 2>/dev/null | grep -v '^#')
+
+# Limpa estado anterior e empacota
+fakeroot debian/rules clean
+fakeroot debian/rules binary
 ```
 
-O `.deb` gerado vai para o diretório bin.
+O `.deb` gerado fica em `bin/bme280-reader_<versão>_arm64.deb`.
 
+**No CI (GitHub Actions)** — o runner tem diretório pai gravável, mas usa o mesmo par de comandos por consistência.
+
+
+## CI/CD — GitHub Actions
+
+Workflow: `.github/workflows/build-deb.yml`
+
+- **Trigger:** somente `workflow_dispatch` (manual via GitHub UI)
+- **Runner:** `ubuntu-24.04`
+- **Passos:** instala toolchain → build → `dpkg-deb --info/--contents` → lintian (informacional) → upload artifact
+- **Artifact:** `bme280-reader-arm64`, retido por 30 dias
+- **Releases:** ainda não configuradas — fase atual é validação via artifact
+
+Para disparar: **Actions → build-deb → Run workflow**.
+
+O artifact é um `.zip` baixado pela UI do GitHub. Para instalar no Pi: extraia o `.zip`, copie o `.deb` via `scp` e instale com `sudo apt install ./bme280-reader_*.deb`.
 
 
 ## Fluxo de deploy manual (resumo)
 
-1. **No devcontainer:** `dpkg-buildpackage -us -uc -b --host-arch arm64` → gera `.deb`
-2. **Copiar** o `.deb` para o Pi (`scp`)
+1. **No devcontainer:** executar os comandos da seção "Convenção de build" → gera `.deb` em `bin/`
+2. **Copiar** o `.deb` para o Pi (`scp bin/bme280-reader_*.deb pi@<IP>:~`)
 3. **No Pi:** `sudo bash kernel-setup.sh` → edita `/boot/firmware/config.txt` e pede reboot
 4. **Reboot** do Pi (manual)
-5. **No Pi:** `sudo apt install ./bme280-exporter_*.deb`
-6. **Verificar:** `systemctl status bme280-exporter.timer` e `cat /var/lib/node_exporter/textfile_collector/bme280.prom`
+5. **No Pi:** `sudo apt install ./bme280-reader_*.deb`
+6. **Verificar:**
+   ```bash
+   id bme280-reader
+   ls /var/lib/node_exporter/textfile_collector/
+   systemctl status bme280-reader.timer
+   sudo systemctl start bme280-reader.service
+   cat /var/lib/node_exporter/textfile_collector/bme280_dummy.prom
+   journalctl -u bme280-reader.service -n 20 --no-pager
+   ```

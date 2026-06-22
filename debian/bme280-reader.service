@@ -1,0 +1,10 @@
+[Unit]
+Description=BME280 sensor reader (hello-world stub)
+Documentation=https://github.com/caruazu/bme280-exporter
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=bme280-reader
+Environment=TEXTFILE_DIR=/var/lib/node_exporter/textfile_collector
+ExecStart=/usr/bin/bme280-reader

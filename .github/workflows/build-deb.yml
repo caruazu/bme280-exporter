@@ -1,0 +1,47 @@
+name: build-deb
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    env:
+      DEB_BUILD_OPTIONS: nocheck
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compilation toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            debhelper \
+            fakeroot \
+            crossbuild-essential-arm64 \
+            libc6-arm64-cross \
+            lintian
+
+      - name: Build .deb for arm64
+        run: |
+          export $(dpkg-architecture -aarm64 2>/dev/null | grep -v '^#')
+          fakeroot debian/rules clean
+          fakeroot debian/rules binary
+
+      - name: Inspect package
+        run: |
+          dpkg-deb --info    bin/bme280-reader_*.deb
+          echo "---"
+          dpkg-deb --contents bin/bme280-reader_*.deb
+
+      - name: Lint package (informational)
+        run: lintian --no-tag-display-experimental bin/bme280-reader_*.deb || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bme280-reader-arm64
+          path: bin/bme280-reader_*.deb
+          if-no-files-found: error
+          retention-days: 30

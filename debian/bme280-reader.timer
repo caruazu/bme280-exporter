@@ -1,0 +1,12 @@
+[Unit]
+Description=Run BME280 sensor reader every minute
+Documentation=https://github.com/caruazu/bme280-exporter
+Requires=bme280-reader.service
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
