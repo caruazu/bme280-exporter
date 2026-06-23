@@ -1,12 +1,16 @@
 {
   "name": "${localWorkspaceFolderBasename}",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "options": [
+      "--platform=linux/arm64"
+    ]
   },
   "mounts": [
     "source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
   ],
-    "runArgs": [
+  "runArgs": [
+    "--platform=linux/arm64",
     "--add-host=host.docker.internal:host-gateway"
   ],
   "postCreateCommand": "bash .devcontainer/post-create.sh",

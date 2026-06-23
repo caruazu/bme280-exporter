@@ -9,7 +9,7 @@ CFLAGS  = -std=c11 -Wall -Wextra -Wpedantic \
           -O2
 LDFLAGS = -Wl,-z,relro -Wl,-z,now
 
-.PHONY: all clean
+.PHONY: all clean deb
 
 all: $(BINDIR)/$(BINARY)
 
@@ -21,3 +21,7 @@ $(BINDIR):
 
 clean:
 	rm -f $(BINDIR)/$(BINARY)
+
+deb:
+	fakeroot debian/rules clean
+	fakeroot debian/rules binary

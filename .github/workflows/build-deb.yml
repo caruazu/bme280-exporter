@@ -5,7 +5,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    # Native arm64 runner — same architecture as the .deb target (Pi / VM A1).
+    runs-on: ubuntu-24.04-arm
 
     env:
       DEB_BUILD_OPTIONS: nocheck
@@ -13,19 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross-compilation toolchain
+      - name: Install build toolchain
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
+            build-essential \
             debhelper \
             fakeroot \
-            crossbuild-essential-arm64 \
-            libc6-arm64-cross \
             lintian
 
-      - name: Build .deb for arm64
+      - name: Build .deb (native arm64)
         run: |
-          export $(dpkg-architecture -aarm64 2>/dev/null | grep -v '^#')
           fakeroot debian/rules clean
           fakeroot debian/rules binary
 

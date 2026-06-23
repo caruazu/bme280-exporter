@@ -42,28 +42,28 @@ Esse e-mail deve constar em `debian/changelog` e `debian/control`.
 
 **Imagem base:** `mcr.microsoft.com/devcontainers/base:ubuntu-24.04`  
 **Usuário:** `vscode`  
-**Arquitetura do container:** `x86_64 / amd64`
+**Arquitetura do container:** `arm64 / aarch64` (forçada via `--platform=linux/arm64` em `devcontainer.json`)
+
+> **Mudança importante:** o devcontainer agora roda em **arm64**, a mesma arquitetura do alvo. A compilação é **nativa** — o `gcc` padrão já gera binário aarch64. **Não há mais cross-compilação**: o `install-stack.sh` não instala mais `crossbuild-essential-arm64` nem `libc6-*-cross`. Como a arquitetura bate com a do alvo, o binário do stub também **roda no próprio devcontainer**.
+
+> **Nota sobre `gcc-aarch64-linux-gnu`/`binutils-aarch64-linux-gnu`:** num sistema arm64 nativo, o triplet do host *é* `aarch64-linux-gnu`, então o pacote `gcc` **depende** desses dois — eles permanecem instalados (marcados `auto`, não removidos por `apt autoremove`). **Não são leftover de cross-compilação**: fazem parte do toolchain nativo. Por isso não estão listados como ferramentas "instaladas pelo projeto" abaixo.
 
 ### Ferramentas instaladas
 
 | Ferramenta | Versão |
 |||
-| gcc (amd64) | 13.3.0 |
+| gcc (aarch64) | 13.3.0 |
 | g++ | 13.3.0 |
 | gdb | instalado |
 | cmake | 3.28.3 |
 | make | 4.3 |
 | valgrind | instalado |
-| libc6-dev (amd64) | 2.39 |
+| libc6-dev (arm64) | 2.39 |
 | build-essential | instalado |
 | claude (CLI) | auto-atualizado em runtime |
 | dpkg / dpkg-buildpackage | 1.22.6 |
 | debhelper (`dh`) | 13.14.1 |
 | fakeroot | 1.33 |
-| gcc-aarch64-linux-gnu | 13.2.0 |
-| binutils-aarch64-linux-gnu | 2.42 |
-| libc6-dev-arm64-cross | 2.39 |
-| crossbuild-essential-arm64 | 12.10 |
 | lintian | 2.117.0 |
 | devscripts | 2.23.7 |
 
@@ -74,6 +74,19 @@ O diretório pai `/workspaces/` pertence a `root:root` e **não é gravável pel
 ### Volume persistente do Claude
 
 `claude-code-config-<devcontainerId>` montado em `~/.claude` — persiste login e config entre rebuilds.
+
+
+## Ambientes (Dev / Homologação / Produção)
+
+Todos os três ambientes são **arm64 (aarch64)** — por isso o build é nativo de ponta a ponta.
+
+| Ambiente | Máquina | Para quê |
+|---|---|---|
+| **Dev** | devcontainer arm64 (no notebook) | editar, compilar, empacotar, inspecionar **e rodar o stub** |
+| **Homologação** | VM A1 arm64 com Debian 13 (trixie) | testar o `.deb` de verdade: systemd, sysusers, tmpfiles, ciclo install→enable→remove→purge |
+| **Produção** | Raspberry Pi 4 | sensor real (IIO/BME280), deploy final |
+
+O devcontainer cobre build + inspeção estática + execução do binário. A validação de **systemd/dpkg** acontece na **VM A1** (o container não roda systemd como PID 1). O **Pi** fica para o sensor real. Detalhes passo a passo em `TEST.md`.
 
 
 ## Arquitetura (decisões fechadas — não questionar)
@@ -89,7 +102,7 @@ O diretório pai `/workspaces/` pertence a `root:root` e **não é gravável pel
 - C11, binário único, linka apenas a libc (sem bibliotecas externas).
 - Compilado com flags de hardening (ver seção abaixo).
 - Lê o `/sys`, escala unidades, grava o `.prom`.
-- Cross-compilado para `aarch64` no devcontainer.
+- Compilado **nativamente** para `aarch64` (devcontainer, VM e Pi são todos arm64).
 
 ### Modelo de execução: oneshot via systemd
 - O leitor é **processo de execução curta**: acorda, roda uma vez, encerra.
@@ -193,10 +206,7 @@ CFLAGS = -std=c11 -Wall -Wextra -Wpedantic \
 LDFLAGS = -Wl,-z,relro -Wl,-z,now
 ```
 
-Cross-compilation para aarch64 (resolvido automaticamente via `debian/rules` + `dpkg/architecture.mk`):
-```makefile
-CC = $(DEB_HOST_GNU_TYPE)-gcc   # ex: aarch64-linux-gnu-gcc quando host=arm64
-```
+O `CC` fica no padrão (`gcc`). Como o devcontainer é arm64, o `gcc` nativo já emite aarch64 — **sem cross-compiler, sem `DEB_HOST_GNU_TYPE`, sem `architecture.mk`**.
 
 
 ## Estrutura debian/ existente
@@ -216,9 +226,6 @@ CC = $(DEB_HOST_GNU_TYPE)-gcc   # ex: aarch64-linux-gnu-gcc quando host=arm64
 O `debian/rules` usa compat 13 com as seguintes particularidades:
 
 ```makefile
-include /usr/share/dpkg/architecture.mk
-export CC := $(DEB_HOST_GNU_TYPE)-gcc
-
 %:
     dh $@ --with=installsysusers       # necessário no compat 13 (auto só no 14)
 
@@ -227,12 +234,11 @@ override_dh_auto_install:              # Makefile não tem target install
 override_dh_install:
     dh_install --sourcedir=.           # lê bin/ diretamente, sem debian/tmp
 
-override_dh_shlibdeps:
-    dh_shlibdeps -- -l/usr/$(DEB_HOST_MULTIARCH)/lib   # stubs arm64 sem multiarch completo
-
 override_dh_builddeb:
     dh_builddeb --destdir=bin          # saída em bin/ (pai não-gravável no devcontainer)
 ```
+
+> Build nativo: o `CC` fica no padrão (`gcc`) e o `dh_shlibdeps` usa o multiarch do sistema (`/usr/lib/aarch64-linux-gnu`). Por isso **caíram** o `include architecture.mk`, o `export CC := …-gcc` e o `override_dh_shlibdeps` que existiam na versão cross.
 
 
 ## Gotchas de empacotamento (lições aprendidas)
@@ -240,11 +246,10 @@ override_dh_builddeb:
 | Problema | Causa | Solução |
 |||---|
 | `dh_installsysusers` não instala nada | no compat 13 não está na sequência padrão | `dh $@ --with=installsysusers` em `debian/rules` |
-| `dpkg-shlibdeps` não acha `libc.so.6` arm64 | sem multiarch `arm64` instalado | `override_dh_shlibdeps` com `-l/usr/aarch64-linux-gnu/lib` |
 | `dpkg-buildpackage` falha com "Permission denied" | `/workspaces/` é `root:root`, não gravável | usar `fakeroot debian/rules clean && fakeroot debian/rules binary` |
 | `dh binary` pula o `dh_auto_build` | `debian/debhelper-build-stamp` de build anterior persiste | sempre executar `debian/rules clean` antes de `binary` |
-| `dpkg-architecture -Aarm64` não muda `DEB_HOST_*` | `-A` (maiúsculo) configura TARGET, não HOST | usar `-aarm64` (minúsculo) para configurar HOST |
-| `eval $(dpkg-architecture ...)` não exporta as variáveis | `eval` só define variáveis de shell | usar `export $(dpkg-architecture -aarm64 ...)` |
+
+> Os gotchas de cross-compilação (overrides de `dh_shlibdeps`, `dpkg-architecture -aarm64`, `export $(…)`) **deixaram de existir** com o build nativo arm64.
 
 
 ## Convenção de build do pacote
@@ -252,17 +257,14 @@ override_dh_builddeb:
 **No devcontainer** (único jeito que funciona — `dpkg-buildpackage` não grava em `/workspaces/`):
 
 ```bash
-# Exporta variáveis de arquitetura para o host arm64
-export $(dpkg-architecture -aarm64 2>/dev/null | grep -v '^#')
-
-# Limpa estado anterior e empacota
+# Limpa estado anterior e empacota (build nativo arm64)
 fakeroot debian/rules clean
 fakeroot debian/rules binary
 ```
 
-O `.deb` gerado fica em `bin/bme280-reader_<versão>_arm64.deb`.
+Ou simplesmente `make deb`, que roda esse mesmo par. O `.deb` gerado fica em `bin/bme280-reader_<versão>_arm64.deb`.
 
-**No CI (GitHub Actions)** — o runner tem diretório pai gravável, mas usa o mesmo par de comandos por consistência.
+**No CI (GitHub Actions)** — roda em runner arm64 nativo (`ubuntu-24.04-arm`) e usa o mesmo par de comandos por consistência.
 
 
 ## CI/CD — GitHub Actions
@@ -270,8 +272,8 @@ O `.deb` gerado fica em `bin/bme280-reader_<versão>_arm64.deb`.
 Workflow: `.github/workflows/build-deb.yml`
 
 - **Trigger:** somente `workflow_dispatch` (manual via GitHub UI)
-- **Runner:** `ubuntu-24.04`
-- **Passos:** instala toolchain → build → `dpkg-deb --info/--contents` → lintian (informacional) → upload artifact
+- **Runner:** `ubuntu-24.04-arm` (arm64 nativo — sem cross-compilação)
+- **Passos:** instala toolchain (`build-essential`, `debhelper`, `fakeroot`, `lintian`) → build nativo → `dpkg-deb --info/--contents` → lintian (informacional) → upload artifact
 - **Artifact:** `bme280-reader-arm64`, retido por 30 dias
 - **Releases:** ainda não configuradas — fase atual é validação via artifact
 
@@ -282,12 +284,13 @@ O artifact é um `.zip` baixado pela UI do GitHub. Para instalar no Pi: extraia 
 
 ## Fluxo de deploy manual (resumo)
 
-1. **No devcontainer:** executar os comandos da seção "Convenção de build" → gera `.deb` em `bin/`
-2. **Copiar** o `.deb` para o Pi (`scp bin/bme280-reader_*.deb pi@<IP>:~`)
-3. **No Pi:** `sudo bash kernel-setup.sh` → edita `/boot/firmware/config.txt` e pede reboot
-4. **Reboot** do Pi (manual)
-5. **No Pi:** `sudo apt install ./bme280-reader_*.deb`
-6. **Verificar:**
+1. **Dev (devcontainer):** `make deb` → gera `.deb` em `bin/`; opcionalmente rodar o stub localmente (`TEXTFILE_DIR=/tmp/tc ./bin/bme280-reader`)
+2. **Homologação (VM A1):** `scp` o `.deb` para a VM e validar o ciclo completo `apt install → enable → remove → purge` com systemd real (ver `TEST.md`, Parte 3)
+3. **Copiar** o `.deb` para o Pi (`scp bin/bme280-reader_*.deb pi@<IP>:~`)
+4. **No Pi:** `sudo bash kernel-setup.sh` → edita `/boot/firmware/config.txt` e pede reboot
+5. **Reboot** do Pi (manual)
+6. **No Pi:** `sudo apt install ./bme280-reader_*.deb`
+7. **Verificar:**
    ```bash
    id bme280-reader
    ls /var/lib/node_exporter/textfile_collector/
